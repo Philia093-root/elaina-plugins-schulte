@@ -1,6 +1,6 @@
 """
 舒尔特方格训练 — 5×5 回调按钮，按 1→25 顺序点击计时
-带web面板，可设置渲染图页脚和配色
+带web面板，可设置渲染图页脚、配色和返回指令
 需开启并配置图床才能发送图片，否则以文本形式发送
 """
 
@@ -41,14 +41,6 @@ log = get_logger(PLUGIN, '舒尔特')
 GRID_SIZE = 5
 TOTAL = GRID_SIZE * GRID_SIZE
 RANK_LIMIT = 20
-
-MENU_BTNS = [
-    [
-        {'text': '开始训练', 'type': 2, 'data': '/开始训练'},
-        {'text': '结束训练', 'type': 2, 'data': '/结束训练'},
-        {'text': '舒尔特排行', 'type': 2, 'data': '/舒尔特排行'},
-    ],
-]
 
 # ==================== 预设配色方案 ====================
 # 每个方案包含：背景色、头部渐变色(起始, 结束), 强调色, 文字主色, 次级文字色, 装饰透明色, 阴影色, 奖牌色(金,银,铜), 分割线色
@@ -300,8 +292,27 @@ F_text = '昔涟'
 F_sign = '♡'
 F_sign_enabled = True
 COLOR_SCHEME = PRESET_COLORS['粉红']  # 默认
+MENU_t = '/返回'  # 返回按钮指令，可在web面板修改
 
 _CONFIG_LOCK = threading.Lock()
+
+def get_menu_btns1():
+    return [
+        [
+            {'text': '开始训练', 'type': 2, 'data': '/开始训练'},
+            {'text': '返回', 'type': 2, 'data': MENU_t},
+            {'text': '舒尔特排行', 'type': 2, 'data': '/舒尔特排行'},
+        ],
+    ]
+
+def get_menu_btns2():
+    return [
+        [
+            {'text': '再来一次', 'type': 2, 'data': '/开始训练'},
+            {'text': '返回', 'type': 2, 'data': MENU_t},
+            {'text': '舒尔特排行', 'type': 2, 'data': '/舒尔特排行'},
+        ],
+    ]
 
 # ==================== 通用工具 ====================
 
@@ -425,7 +436,7 @@ def _stats() -> dict:
 
 def _init_config():
     """从数据库加载配置到全局变量，若不存在则写入默认值"""
-    global F_text, F_sign, F_sign_enabled, COLOR_SCHEME
+    global F_text, F_sign, F_sign_enabled, COLOR_SCHEME, MENU_t
     with _CONFIG_LOCK:
         cur = _db().execute('SELECT key, value FROM config')
         config = {row['key']: row['value'] for row in cur.fetchall()}
@@ -433,7 +444,8 @@ def _init_config():
             'f_text': '昔涟',
             'f_sign': '♡',
             'f_sign_enabled': 'true',
-            'color_scheme': '粉红'
+            'color_scheme': '粉红',
+            'menu_t': '/返回'
         }
         for k, v in defaults.items():
             if k not in config:
@@ -449,10 +461,11 @@ def _init_config():
             COLOR_SCHEME = PRESET_COLORS[scheme_name]
         else:
             COLOR_SCHEME = PRESET_COLORS['粉红']
+        MENU_t = config.get('menu_t', '/返回')
 
 def _set_config(key: str, value: str):
     """更新配置并立即保存到数据库，同时更新全局变量"""
-    global F_text, F_sign, F_sign_enabled, COLOR_SCHEME
+    global F_text, F_sign, F_sign_enabled, COLOR_SCHEME, MENU_t
     with _CONFIG_LOCK:
         with _conn_lock:
             _db().execute('REPLACE INTO config (key, value) VALUES (?, ?)', (key, value))
@@ -466,6 +479,8 @@ def _set_config(key: str, value: str):
         elif key == 'color_scheme':
             if value in PRESET_COLORS:
                 COLOR_SCHEME = PRESET_COLORS[value]
+        elif key == 'menu_t':
+            MENU_t = value
 
 def _get_config(key: str) -> str | None:
     """获取单个配置（从数据库直接读取，保证最新）"""
@@ -632,16 +647,25 @@ def _draw_card(img, d, x, y, card_w, card_h, rows_sub, start_rank, row_h, appid,
     for i, r in enumerate(rows_sub):
         iy = y + 20 + i * row_h
         rank_no = start_rank + i
-        medal = medals[min(i, 2)] if start_rank == 1 else medals[min(rank_no - 1, 2)]
 
-        mx0, my0 = x + 24, iy + 18
-        mx1, my1 = x + 56, iy + 50
-        d.ellipse((mx0, my0, mx1, my1), fill=medal)
+        # 仅前3名绘制背景
+        if rank_no <= 3:
+            medal = medals[min(i, 2)] if start_rank == 1 else medals[min(rank_no - 1, 2)]
+            mx0, my0 = x + 24, iy + 18
+            mx1, my1 = x + 56, iy + 50
+            d.ellipse((mx0, my0, mx1, my1), fill=medal)
+            num_color = (255, 255, 255)
+        else:
+            # 无背景，使用主题色
+            mx0, my0 = x + 24, iy + 18  # 保持占位，便于对齐
+            mx1, my1 = x + 56, iy + 50
+            num_color = scheme['text']
 
         nf = _rank_font(22, bold=True)
         tnum = str(rank_no)
         tw = d.textlength(tnum, nf)
-        d.text((mx0 + (32 - tw) / 2, my0 + 2), tnum, font=nf, fill=(255, 255, 255))
+        # 数字居中绘制（有背景时居中于椭圆，无背景时居中于相同区域）
+        d.text((mx0 + (32 - tw) / 2, my0 + 2), tnum, font=nf, fill=num_color)
 
         ax = x + 72
         ay = iy + 18
@@ -970,7 +994,7 @@ async def _build_rank_message(event, rows, my_best):
 async def cmd_start(event, match):
     uid = event.user_id or ''
     if not uid:
-        return await event.reply('❌ 无法识别用户', buttons=MENU_BTNS)
+        return await event.reply('❌ 无法识别用户', buttons=get_menu_btns1())
 
     if _get_session(uid):
         _set_session(uid, None)
@@ -987,23 +1011,23 @@ async def cmd_start(event, match):
     except Exception as e:
         _set_session(uid, None)
         log.error('开始训练失败: %s', e)
-        await event.reply(f'❌ 开始失败：{e}', buttons=MENU_BTNS)
+        await event.reply(f'❌ 开始失败：{e}', buttons=get_menu_btns1())
 
 @handler(r'^/?结束训练$', name='结束训练', desc='放弃当前训练', ignore_at_check=True)
 async def cmd_stop(event, match):
     uid = event.user_id or ''
     if _get_session(uid):
         _set_session(uid, None)
-        await event.reply('🛑 已结束当前训练', buttons=MENU_BTNS)
+        await event.reply('🛑 已结束当前训练', buttons=get_menu_btns2())
     else:
-        await event.reply('ℹ️ 你当前没有进行中的训练', buttons=MENU_BTNS)
+        await event.reply('ℹ️ 你当前没有进行中的训练', buttons=get_menu_btns1())
 
 @handler(r'^/?舒尔特排行$', name='舒尔特排行', desc='全服最快完成排行 TOP20', ignore_at_check=True)
 async def cmd_rank(event, match):
     rows = await asyncio.to_thread(_best_records, RANK_LIMIT)
     my_best = await asyncio.to_thread(_user_best, event.user_id or '')
     text = await _build_rank_message(event, rows, my_best)
-    await event.reply(text, buttons=MENU_BTNS, skip_suffix=True)
+    await event.reply(text, buttons=get_menu_btns1(), skip_suffix=True)
 
 # ==================== 按钮交互 ====================
 
@@ -1048,7 +1072,7 @@ async def on_grid_click(event, match):
         await _ack(event, _CODE_NO_PERM)
         await event.reply(
             f'**⚠️ 无法操作**\n<@{uid}>\n>这是 <@{session["user_id"]}> 的训练方格',
-            buttons=MENU_BTNS,
+            buttons=get_menu_btns1(),
             skip_suffix=True,
         )
         return
@@ -1058,7 +1082,7 @@ async def on_grid_click(event, match):
         await _ack(event, _CODE_FAIL)
         await event.reply(
             f'**测试结束**\n>应点击：**{session["next"]}**，你点了：**{num}**',
-            buttons=MENU_BTNS,
+            buttons=get_menu_btns2(),
             skip_suffix=True,
         )
         return
@@ -1095,7 +1119,7 @@ async def on_grid_click(event, match):
                     if url:
                         w, h = struct.unpack('>II', image[16:24])
                         msg = f'<@{uid}>![舒尔特成绩 #{w}px #{h}px]({url})'
-                        await _reply_later(event, msg, buttons=MENU_BTNS)
+                        await _reply_later(event, msg, buttons=get_menu_btns2())
                         image_sent = True
             except Exception as e:
                 log.error('个人成绩图片渲染/发送失败: %s', e, exc_info=True)
@@ -1110,7 +1134,7 @@ async def on_grid_click(event, match):
             if my_best:
                 lines.append(f'>🏅 你的最佳：**{_fmt_duration(my_best)}**')
             lines.append('>已写入排行榜，发送「舒尔特排行」查看')
-            await _reply_later(event, '\n'.join(lines), buttons=MENU_BTNS)
+            await _reply_later(event, '\n'.join(lines), buttons=get_menu_btns2())
         return
 
     session['next'] = num + 1
@@ -1132,7 +1156,7 @@ if HAS_WEB_PAGES:
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>舒尔特数据</title>
+            <title>舒尔特方格</title>
             <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
             <style>
                 * { box-sizing: border-box; }
@@ -1491,7 +1515,7 @@ if HAS_WEB_PAGES:
             <div class="container">
                 <!-- 头部 -->
                 <div class="header">
-                    <h1><i class="fas fa-table"></i> 舒尔特方格 · 数据面板</h1>
+                    <h1><i class="fas fa-table"></i> 舒尔特方格</h1>
                     <button class="refresh-all" onclick="loadAll()">
                         <i class="fas fa-sync-alt"></i> 刷新全部
                     </button>
@@ -1558,6 +1582,10 @@ if HAS_WEB_PAGES:
                             <option value="石墨">石墨</option>
                         </select>
                     </div>
+                    <div class="setting-item">
+                        <label><i class="fas fa-undo-alt"></i> 返回指令</label>
+                        <input type="text" id="menu-t-input" placeholder="例：/返回">
+                    </div>
                     <button class="save-btn" onclick="saveConfig()">
                         <i class="fas fa-save"></i> 保存设置
                     </button>
@@ -1603,9 +1631,7 @@ if HAS_WEB_PAGES:
                     </div>
                 </div>
 
-                <div class="footer">
-                    <i class="fas fa-heart" style="color:#c71585;"></i> 舒尔特方格 ｜ 数据实时更新
-                </div>
+                <div class="footer">舒尔特方格</div>
             </div>
 
             <script>
@@ -1629,6 +1655,7 @@ if HAS_WEB_PAGES:
                                 break;
                             }
                         }
+                        document.getElementById('menu-t-input').value = config.menu_t || '/返回';
                     } catch(e) {
                         console.error('加载配置失败:', e);
                     }
@@ -1643,11 +1670,12 @@ if HAS_WEB_PAGES:
                     const f_sign = document.getElementById('f-sign-input').value.trim();
                     const f_sign_enabled = document.getElementById('f-sign-enabled').checked ? 'true' : 'false';
                     const color_scheme = document.getElementById('color-scheme-select').value;
+                    const menu_t = document.getElementById('menu-t-input').value.trim() || '/返回';
                     try {
                         const res = await fetch('/api/ext/shuerte/config', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ f_text, f_sign, f_sign_enabled, color_scheme })
+                            body: JSON.stringify({ f_text, f_sign, f_sign_enabled, color_scheme, menu_t })
                         });
                         if (!res.ok) throw new Error('保存失败');
                         const msg = document.getElementById('save-msg');
@@ -1781,6 +1809,7 @@ if HAS_WEB_PAGES:
         f_sign = data.get('f_sign', '').strip()
         f_sign_enabled = data.get('f_sign_enabled', 'true')
         color_scheme = data.get('color_scheme', '粉红')
+        menu_t = data.get('menu_t', '/返回').strip()
         # 校验
         if not f_text:
             f_text = '昔涟'
@@ -1790,11 +1819,14 @@ if HAS_WEB_PAGES:
             f_sign_enabled = 'true'
         if color_scheme not in PRESET_COLORS:
             color_scheme = '粉红'
+        if not menu_t:
+            menu_t = '/返回'
         # 保存
         await asyncio.to_thread(_set_config, 'f_text', f_text)
         await asyncio.to_thread(_set_config, 'f_sign', f_sign)
         await asyncio.to_thread(_set_config, 'f_sign_enabled', f_sign_enabled)
         await asyncio.to_thread(_set_config, 'color_scheme', color_scheme)
+        await asyncio.to_thread(_set_config, 'menu_t', menu_t)
         return aiohttp.web.json_response({'ok': True})
 
     def _unregister_web():
@@ -1826,7 +1858,7 @@ async def _init():
     await asyncio.to_thread(_db)
     await asyncio.to_thread(_init_config)
     _rank_find_font()
-    log.info('舒尔特方格插件已加载（配色方案数：%d）', len(PRESET_COLORS))
+    log.info('舒尔特方格插件已加载')
 
 @on_unload
 def _cleanup():
