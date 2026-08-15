@@ -32,7 +32,7 @@ __plugin_meta__ = {
     'name': '舒尔特方格(带web面板)',
     'author': '涟',
     'description': '5×5 舒尔特方格反应力训练，全服 TOP20 排行，个人成绩卡片，带web面板和配色设置',
-    'version': '0.9.3',
+    'version': '1.0.0',
     'github': 'https://github.com/Philia093-root/elaina-plugins-schulte/',
 }
 
